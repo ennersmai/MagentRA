@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>MagentAssist Tester</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 20px auto; padding: 20px; }
+        .section { margin-bottom: 20px; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .db-select { margin: 10px 0; }
+        button { padding: 8px 15px; margin: 5px; cursor: pointer; }
+        pre { background: #f4f4f4; padding: 10px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+    <h1>MagentAssist Test Client</h1>
+    
+    <!-- Database Selection -->
+    <div class="db-select">
+        <label>Current Database: </label>
+        <select id="dbSelector">
+            <option value="neo4j">Neo4j</option>
+            <option value="supabase">Supabase</option>
+            <option value="both">Both</option>
+        </select>
+    </div>
+
+    <!-- Add session selector -->
+    <div class="section">
+        <label>Active Session: </label>
+        <select id="sessionSelector">
+            <option value="global">Global Knowledge</option>
+            <option value="client-123">Client 123</option>
+            <option value="temp-session">Temporary Session</option>
+        </select>
+    </div>
+
+    <!-- Ingestion Section -->
+    <div class="section">
+        <h2>Document Ingestion</h2>
+        <input type="text" id="filePath" placeholder="File path (e.g., knowledge/sample.txt)" style="width: 300px;">
+        <button onclick="ingestDocument()">Ingest</button>
+        <div id="ingestionResult"></div>
+    </div>
+
+    <!-- Query Section -->
+    <div class="section">
+        <h2>Document Query</h2>
+        <input type="text" id="question" placeholder="Enter your question" style="width: 300px;">
+        <button onclick="queryDocuments()">Search</button>
+        <div id="queryResult"></div>
+    </div>
+
+    <!-- Operation Logs -->
+    <div class="section">
+        <h2>Operation Logs</h2>
+        <div id="logs" style="height: 200px; overflow-y: auto; background: #f8f9fa; padding: 10px;"></div>
+    </div>
+
+    <script>
+        const API_BASE = "http://localhost:8000";
+        let logHistory = [];
+        const sessionIngestions = new Map();
+
+        function addLog(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${message}`;
+            logHistory.push(logEntry);
+            document.getElementById('logs').innerHTML = logHistory.map(entry => 
+                `<div class="log-entry">${entry}</div>`
+            ).join('');
+            document.getElementById('logs').scrollTop = document.getElementById('logs').scrollHeight;
+        }
+
+        async function ingestDocument() {
+            const filePath = document.getElementById('filePath').value;
+            const dbType = document.getElementById('dbSelector').value;
+            const session = document.getElementById('sessionSelector').value;
+            
+            // Store ingestion record locally
+            if (!sessionIngestions.has(session)) {
+                sessionIngestions.set(session, new Set());
+            }
+            sessionIngestions.get(session).add(filePath);
+            
+            try {
+                addLog(`Starting ingestion to ${dbType.toUpperCase()}...`);
+                
+                const response = await fetch(`${API_BASE}/ingest`, {
+                    method: 'POST',
+                    headers: { 
+                        'Content-Type': 'application/json',
+                        'Access-Control-Allow-Origin': '*' 
+                    },
+                    body: JSON.stringify({
+                        file_path: filePath,
+                        database: dbType
+                    })
+                });
+                
+                const result = await response.json();
+                addLog(`Ingestion successful! Chunks: ${(result.neo4j || result.supabase || 'N/A')}`);
+                displayResult('ingestionResult', result);
+            } catch (error) {
+                addLog(`Ingestion failed: ${error.message}`, 'error');
+                showError('ingestionResult', error);
+            }
+        }
+
+        async function queryDocuments() {
+            const question = document.getElementById('question').value;
+            const dbType = document.getElementById('dbSelector').value;
+            const activeSession = document.getElementById('sessionSelector').value;
+            
+            try {
+                addLog(`Querying ${dbType.toUpperCase()} for: "${question}"`);
+                
+                const response = await fetch(`${API_BASE}/query`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        question: question,
+                        database: dbType
+                    })
+                });
+                
+                const data = await response.json();
+                // Ensure that results is an array: try data.results first; if not, use data directly
+                let results = [];
+                if (Array.isArray(data)) {
+                    results = data;
+                } else if (data && Array.isArray(data.results)) {
+                    results = data.results;
+                } else {
+                    results = [data];
+                }
+                addLog(`Found ${results.length} results with scores ${results.map(r => (r.score !== undefined ? r.score.toFixed(2) : "N/A")).join(', ')}`);
+                
+                // Client-side filtering
+                const filtered = results.filter(item => {
+                    return activeSession === 'global' || 
+                           item.metadata.client_id === activeSession;
+                });
+                
+                displayResults(filtered);
+            } catch (error) {
+                addLog(`Query failed: ${error.message}`, 'error');
+                showError('queryResult', error);
+            }
+        }
+
+        function displayResult(elementId, data) {
+            const container = document.getElementById(elementId);
+            container.innerHTML = `<pre>${JSON.stringify(data, null, 2)}</pre>`;
+        }
+
+        function showError(elementId, error) {
+            const container = document.getElementById(elementId);
+            container.innerHTML = `<div style="color: red;">Error: ${error.message}</div>`;
+        }
+
+        // This function ensures results (an array or single object) are processed and displayed
+        function displayResults(results) {
+            const container = document.getElementById("queryResult");
+            container.innerHTML = "";
+            // Ensure results is an array
+            if (!Array.isArray(results)) {
+                results = [results];
+            }
+            results.forEach(result => {
+                const p = document.createElement("p");
+                p.textContent = JSON.stringify(result);
+                container.appendChild(p);
+            });
+        }
+    </script>
+</body>
+</html> 

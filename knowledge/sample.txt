@@ -1,0 +1,10 @@
+LangChain v0.3 Neo4j Integration Details:
+- Vector index support for 1536-dimensional embeddings
+- Hybrid search combining vector and keyword matching
+- Metadata filtering capabilities
+- Seamless integration with LangChain's RAG pipelines
+
+Technical Specifications:
+- Recommended chunk size: 500-1500 characters
+- Supported distance metrics: cosine, euclidean
+- Minimum required Neo4j version: 5.11+
