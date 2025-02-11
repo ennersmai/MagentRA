@@ -1,17 +1,53 @@
 <script setup>
 import { ref, onMounted, nextTick } from 'vue'
+import { storeToRefs } from 'pinia'
 import { useChatStore } from '@/stores/chat'
 
 const store = useChatStore()
+const { history } = storeToRefs(store)
+console.log('Store initialized:', store)
+console.log('Initial history:', history.value)
 const message = ref('')
 const chatContainer = ref(null)
 
 const sendMessage = async () => {
+  console.log("sendMessage triggered, message:", message.value)
   if (!message.value.trim()) return
-  await store.sendMessage({
-    text: message.value,
-    sessionId: store.sessionId
-  })
+  const humanMessage = {
+    type: "HumanMessage",
+    content: message.value,
+    additional_kwargs: {}
+  }
+  if (!history || !history.value) {
+    console.error("history is undefined")
+  } else {
+    history.value.push(humanMessage)
+  }
+
+  try {
+    const response = await fetch("http://localhost:8000/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: message.value,
+        history: history.value
+      })
+    })
+    const data = await response.json()
+
+    if (data.response) {
+      const aiMessage = {
+        type: "AIMessage",
+        content: data.response,
+        additional_kwargs: {}
+      }
+      history.value.push(aiMessage)
+      console.log("Received AI message:", aiMessage)
+    }
+  } catch (error) {
+    console.error("Error fetching chat response:", error)
+  }
+
   message.value = ''
   await nextTick()
   if (chatContainer.value) {
@@ -33,10 +69,9 @@ onMounted(() => {
     </header>
     <div class="chat-container" ref="chatContainer">
       <div
-
-        v-for="msg in store.messages"
-        :key="msg.id"
-        :class="['message-bubble', msg.role]"
+        v-for="(msg, index) in history"
+        :key="index"
+        :class="['message-bubble', msg.type === 'HumanMessage' ? 'user' : 'ai']"
       >
         <div class="message-content">
           {{ msg.content }}

@@ -3,18 +3,21 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 export const useChatStore = defineStore('chat', () => {
-  const messages = ref([])
-  const sessionId = ref('global')
+  // Initialize history as a reactive array
+  const history = ref([])
+
+  // Optionally, add other properties, e.g. sessionId
+  const sessionId = ref(Date.now().toString())
 
   // Function to send a message and retrieve the agent's response from the FastAPI backend.
   const sendMessage = async (payload) => {
-    // Add the user's message to the store.
+    // Append messages using store.history.value.push(...)
     const userMessage = {
       id: Date.now(),
       role: 'user',
       content: payload.text
     }
-    messages.value.push(userMessage)
+    history.value.push(userMessage)
 
     // Call the backend /chat endpoint.
     try {
@@ -25,7 +28,7 @@ export const useChatStore = defineStore('chat', () => {
         },
         body: JSON.stringify({
           message: payload.text,
-          history: messages.value.map(m => m.content)
+          history: history.value.map(m => m.content)
         })
       })
 
@@ -41,7 +44,7 @@ export const useChatStore = defineStore('chat', () => {
         role: 'ai',
         content: data.response
       }
-      messages.value.push(aiMessage)
+      history.value.push(aiMessage)
     } catch (error) {
       console.error('Error fetching chat response:', error)
       const errorMessage = {
@@ -49,9 +52,9 @@ export const useChatStore = defineStore('chat', () => {
         role: 'ai',
         content: 'Error: Unable to get response from server.'
       }
-      messages.value.push(errorMessage)
+      history.value.push(errorMessage)
     }
   }
 
-  return { messages, sessionId, sendMessage }
+  return { history, sessionId, sendMessage }
 })

@@ -3,17 +3,41 @@ import os
 import uuid
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
 from langchain_community.vectorstores import Neo4jVector  # For Neo4j ingestion
 import supabase
 from neo4j import GraphDatabase
+from langchain_community.document_transformers import Html2TextTransformer, OpenAIMetadataTagger
+from langchain.chains import create_tagging_chain
+from pydantic import SecretStr
+import re
+
 load_dotenv()
+
+# Update metadata schema format
+metadata_schema = {
+    "properties": {
+        "source": {
+            "type": "string",
+            "description": "Document source path or origin"
+        },
+        "document_type": {
+            "type": "string", 
+            "description": "Type of document (e.g. article, report, email)"
+        },
+        "keywords": {
+            "type": "string",
+            "description": "Key topics or entities mentioned in the document"
+        }
+    }
+}
+
 class IngestionPipeline:
     def __init__(self):
         # Initialize the embeddings service
         self.embeddings = OpenAIEmbeddings(
             model="text-embedding-3-small",
-            openai_api_key=os.getenv("OPENAI_API_KEY")
+            api_key=SecretStr(os.getenv("OPENAI_API_KEY", ""))
         )
         
         # Load Supabase credentials from env variables
@@ -28,8 +52,8 @@ class IngestionPipeline:
             raise ValueError(f"Missing Supabase credentials: {', '.join(missing)}")
         
         # Create Supabase clients for backend and frontend as needed
-        self.supabase = supabase.create_client(supabase_url, service_key)
-        self.public_supabase = supabase.create_client(supabase_url, anon_key)
+        self.supabase = supabase.create_client(str(supabase_url), str(service_key))
+        self.public_supabase = supabase.create_client(str(supabase_url), str(anon_key))
         
         # Set table name (the expected table in Supabase)
         self.table_name = os.getenv("SUPABASE_DOCS_TABLE", "magentra_docs")
@@ -51,6 +75,8 @@ class IngestionPipeline:
         
         # Setup Neo4j schema/indexes (ensures unique uuids on Chunk nodes)
         self._setup_neo4j_schema()
+        
+        self.document_processor = self._configure_processing_chain()
     
     def _setup_neo4j_schema(self):
         try:
@@ -65,6 +91,26 @@ class IngestionPipeline:
             driver.close()
         except Exception as e:
             print("Error setting up Neo4j schema:", e)
+
+    def _configure_processing_chain(self):
+        llm = ChatOpenAI(temperature=0, model="gpt-3.5-turbo")
+        tagging_chain = create_tagging_chain(metadata_schema, llm)
+        
+        return [
+            Html2TextTransformer(),
+            OpenAIMetadataTagger(tagging_chain=tagging_chain),
+            RecursiveCharacterTextSplitter(
+                chunk_size=1000,
+                chunk_overlap=200,
+                separators=["\n\n", "\n", "。", "．", " ", ""]
+            )
+        ]
+
+    def process_documents(self, docs):
+        """Process documents through each transformer in sequence"""
+        for processor in self.document_processor:
+            docs = processor.transform_documents(docs)
+        return docs
 
     def ingest_document(self, file_path: str, database: str = "both") -> dict:
         """High-level ingestion method for Supabase and/or Neo4j."""
@@ -95,7 +141,7 @@ class IngestionPipeline:
                 raise ValueError("Empty text content in document chunk")
         return docs
 
-    def _ingest_supabase(self, docs) -> int:
+    def _ingest_supabase(self, docs) -> dict[str, int | object]:
         """Insert documents into Supabase.
            Each document's embedding is computed and then stored with its
            content and metadata.
@@ -123,7 +169,7 @@ class IngestionPipeline:
         print(f"Inserted {len(insert_data)} documents into Supabase")
         return {"supabase_inserted": len(insert_data), "supabase_response": response}
 
-    def _ingest_neo4j(self, docs) -> int:
+    def _ingest_neo4j(self, docs) -> dict[str, int | None]:
         """Insert documents into Neo4j.
            Adds a UUID into each document's metadata before ingestion.
         """
@@ -145,6 +191,18 @@ class IngestionPipeline:
         )
         inserted = len(docs)
         print(f"Inserted {inserted} documents into Neo4j")
-        return {"neo4j_inserted": inserted}
+        # Placeholder for actual Supabase ingestion result.
+        supabase_response = None  
+        return {"neo4j_inserted": inserted, "supabase_response": supabase_response}
+
+    def parse(self, text: str) -> dict:
+        # If the output contains a JSON code block delimited by ```json ... ```, extract it.
+        match_json = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if match_json:
+            text = match_json.group(1).strip()
+        else:
+            # Otherwise, remove any extraneous log info appended to the output.
+            text = re.split(r"\s+log=", text, maxsplit=1)[0].strip()
+        return text
 
     
